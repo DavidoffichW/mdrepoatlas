@@ -643,7 +643,7 @@ def write_markdown(out_path, header, tree, file_records, contents_cache):
 
 
 def parse_args(argv):
-    p = argparse.ArgumentParser(prog="c2md", description="LLM-optimized codebase snapshot generator (codebase to single Markdown).")
+    p = argparse.ArgumentParser(description="LLM-optimized codebase snapshot generator (codebase to single Markdown).")
     p.add_argument("-o", "--output", default="code_base.md", help="Output filename (default: code_base.md).")
     p.add_argument("source", nargs="?", help="Source directory (repository root).")
     p.add_argument("-t", "--target", default=None, help="Target directory for output (default: current directory).")
