@@ -1,6 +1,6 @@
 [project]
 name = "mdrepoatlas"
-version = "0.1.1"
+version = "0.1.2"
 description = "LLM-optimized codebase snapshot generator"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.8"

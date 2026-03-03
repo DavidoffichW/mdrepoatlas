@@ -1,4 +1,4 @@
-## [0.1.1] - 2025-09-19
+## [0.1.2] - 2025-09-19
 
 ### Changed
 - Hardened package metadata and classifiers
@@ -9,3 +9,4 @@
 ### Fixed
 - Namespace conflict with previously taken package names
 - Distribution metadata cleanup
+- argparse added --version
