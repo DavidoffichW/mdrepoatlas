@@ -1,5 +1,5 @@
 [project]
-name = "c2md"
+name = "code2md"
 version = "0.1.0"
 description = "LLM-optimized codebase snapshot generator"
 readme = "README.md"
@@ -20,12 +20,12 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/DavidoffichW/c2md"
-Repository = "https://github.com/DavidoffichW/c2md"
-Issues = "https://github.com/DavidoffichW/c2md/issues"
+Homepage = "https://github.com/DavidoffichW/code2md"
+Repository = "https://github.com/DavidoffichW/code2md"
+Issues = "https://github.com/DavidoffichW/code2md/issues"
 
 [project.scripts]
-c2md = "c2md.cli:main"
+code2md = "c2md.cli:main"
 
 [build-system]
 requires = ["setuptools>=68"]
