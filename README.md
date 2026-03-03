@@ -1,12 +1,12 @@
-# c2md: Codebase to Markdown (LLM-Optimized Snapshot Generator)
+# mdrepoatlas: Codebase to Markdown (LLM-Optimized Snapshot Generator)
 
-`c2md` converts a software project into a **single structured Markdown document** (`code_base.md`) designed for Large Language Models to navigate efficiently.
+`mdrepoatlas` converts a software project into a **single structured Markdown document** (`code_base.md`) designed for Large Language Models to navigate efficiently.
 
-Instead of uploading repositories, zipping folders, or pasting fragments, `c2md` produces a **deterministic, navigable, AI-ready snapshot** of your codebase.
+Instead of uploading repositories, zipping folders, or pasting fragments, `mdrepoatlas` produces a **deterministic, navigable, AI-ready snapshot** of your codebase.
 
 ---
 
-## Why c2md Exists
+## Why mdrepoatlas Exists
 
 LLMs do not understand repositories.
 
@@ -20,7 +20,7 @@ Traditional repo exports create problems:
 - ❌ Token waste
 - ❌ Hard for LLMs to reason globally
 
-`c2md` solves this by generating a **single authoritative document**:
+`mdrepoatlas` solves this by generating a **single authoritative document**:
 
 ```
 
@@ -61,7 +61,7 @@ code_base.md
 
 ## Supported Projects
 
-`c2md` is framework-agnostic.
+`mdrepoatlas` is framework-agnostic.
 
 Works with:
 
@@ -82,8 +82,8 @@ Works with:
 Clone:
 
 ```bash
-git clone https://github.com/DavidoffichW/c2md.git
-cd c2md
+git clone https://github.com/DavidoffichW/mdrepoatlas.git
+cd mdrepoatlas
 ````
 
 ## Install (editable)
@@ -96,31 +96,31 @@ pip install -e .
 Interactive mode:
 
 ```bash
-c2md
+mdrepoatlas
 ```
 
 Non-interactive:
 
 ```bash
-c2md /path/to/repo -t /path/to/output -o code_base.md
+mdrepoatlas /path/to/repo -t /path/to/output -o code_base.md
 ```
 
 Exclude patterns (comma-separated; supports globs):
 
 ```bash
-c2md /path/to/repo -x "node_modules/**,dist/**,*.pdf"
+mdrepoatlas /path/to/repo -x "node_modules/**,dist/**,*.pdf"
 ```
 
 Disable default exclusions:
 
 ```bash
-c2md /path/to/repo --no-default-excludes
+mdrepoatlas /path/to/repo --no-default-excludes
 ```
 
 Size limits:
 
 ```bash
-c2md /path/to/repo --max-file-bytes 1048576 --max-total-bytes 0
+mdrepoatlas /path/to/repo --max-file-bytes 1048576 --max-total-bytes 0
 ```
 
 
@@ -278,7 +278,7 @@ Design a new feature consistent with existing patterns.
 
 ## Recommended LLM Workflow
 
-1. Run `c2md`
+1. Run `mdrepoatlas`
 2. Upload `code_base.md`
 3. Initialize model using prompt above
 4. Work normally
@@ -289,7 +289,7 @@ You now have **full-repo reasoning**.
 
 ## Design Philosophy
 
-`c2md` treats an LLM as:
+`mdrepoatlas` treats an LLM as:
 
 > a deterministic reader of structured technical documents.
 
@@ -306,7 +306,7 @@ The goal is **cognitive alignment between repository and model**.
 | Upload repo | ❌ inconsistent             |
 | Paste files | ❌ fragmented               |
 | Zip archive | ❌ opaque                   |
-| `c2md`      | ✅ structured understanding |
+| `mdrepoatlas`      | ✅ structured understanding |
 
 ---
 

@@ -1,21 +1,46 @@
 [project]
 name = "mdrepoatlas"
-version = "0.1.0"
+version = "0.1.1"
 description = "LLM-optimized codebase snapshot generator"
-readme = "README.md"
+readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.8"
 license = {text = "MIT"}
 authors = [{ name = "Abdulaziz Alhulail" }]
-keywords = ["llm", "codebase", "markdown", "snapshot", "cli", "repo-export"]
+keywords = [
+  "llm",
+  "codebase",
+  "repository",
+  "markdown",
+  "snapshot",
+  "documentation",
+  "cli",
+  "developer-tools"
+]
 dynamic = ["dependencies"]
 
 classifiers = [
+  "Development Status :: 3 - Alpha",
+
+  "Intended Audience :: Developers",
+  "Intended Audience :: Information Technology",
+
   "License :: OSI Approved :: MIT License",
+
+  "Environment :: Console",
+
+  "Operating System :: OS Independent",
+
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
-  "Environment :: Console",
-  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+
+  "Topic :: Software Development",
   "Topic :: Software Development :: Documentation",
+  "Topic :: Software Development :: Version Control",
   "Topic :: Utilities",
 ]
 
@@ -28,11 +53,12 @@ Issues = "https://github.com/DavidoffichW/mdrepoatlas/issues"
 mdrepoatlas = "c2md.cli:main"
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-package-dir = {"" = "src"}
+package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["c2md*"]

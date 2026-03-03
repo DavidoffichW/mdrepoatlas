@@ -652,6 +652,7 @@ def parse_args(argv):
     p.add_argument("--no-default-excludes", action="store_true", help="Disable default excludes for builds/binaries/node_modules/etc.")
     p.add_argument("--max-file-bytes", type=int, default=DEFAULT_MAX_FILE_BYTES, help=f"Max bytes per file to embed (0=unlimited, default={DEFAULT_MAX_FILE_BYTES}).")
     p.add_argument("--max-total-bytes", type=int, default=DEFAULT_MAX_TOTAL_BYTES, help="Max total bytes to embed across all files (0=unlimited).")
+    p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     return p.parse_args(argv)
 
 
