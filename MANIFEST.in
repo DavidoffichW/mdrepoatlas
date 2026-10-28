@@ -1,0 +1,4 @@
+include CHANGELOG.md
+include .github/workflows/ci.yml
+include .github/workflows/release.yml
+include tools/validate_release.py

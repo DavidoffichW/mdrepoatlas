@@ -1,28 +1,131 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing vX.Y.Z tag to publish
+        required: true
+        type: string
+      expected_commit:
+        description: Full 40-character commit SHA the tag must resolve to
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.release_tag }}
+  cancel-in-progress: false
 
 jobs:
-  publish:
+  validate-and-build:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      release_commit: ${{ steps.identity.outputs.release_commit }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out release tooling
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch release branch and tags
+        run: git fetch --force --tags origin refs/heads/main:refs/remotes/origin/main
+
+      - name: Validate requested release identity
+        id: identity
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: |
+          release_commit="$(python tools/validate_release.py \
+            --tag "$RELEASE_TAG" \
+            --expected-commit "$EXPECTED_COMMIT" \
+            --release-branch refs/remotes/origin/main)"
+          echo "release_commit=$release_commit" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the validated release commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.identity.outputs.release_commit }}
+          fetch-depth: 0
+
+      - name: Recheck checked-out identity
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          EXPECTED_COMMIT: ${{ steps.identity.outputs.release_commit }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          test "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "$EXPECTED_COMMIT"
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.14"
 
-      - name: Build and publish
+      - name: Build and validate distributions
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build packaging twine
+          python -m build
+          python -m twine check dist/*
+          python - "$RELEASE_TAG" <<'PY'
+          import pathlib
+          import sys
+          from packaging.utils import parse_sdist_filename, parse_wheel_filename
+          from packaging.version import Version
+
+          expected = Version(sys.argv[1][1:])
+          files = sorted(pathlib.Path("dist").iterdir())
+          if len(files) != 2:
+              raise SystemExit(f"expected one wheel and one sdist, found {len(files)}")
+          versions = []
+          for artifact in files:
+              if artifact.suffix == ".whl":
+                  versions.append(parse_wheel_filename(artifact.name)[1])
+              elif artifact.name.endswith(".tar.gz"):
+                  versions.append(parse_sdist_filename(artifact.name)[1])
+              else:
+                  raise SystemExit(f"unexpected distribution artifact: {artifact.name}")
+          if any(version != expected for version in versions):
+              raise SystemExit(f"built versions {versions!r} do not match {expected}")
+          PY
+
+      - name: Preserve validated distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-distributions-${{ inputs.release_tag }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: validate-and-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+
+    steps:
+      - name: Download validated distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: release-distributions-${{ inputs.release_tag }}
+          path: dist
+
+      - name: Recheck package metadata
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install twine
+          python -m twine check dist/*
+
+      - name: Publish the validated distributions
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        run: |
-          python -m pip install --upgrade pip
-          pip install build twine
-          python -m build
-          python -m twine upload dist/*
+        run: python -m twine upload dist/*
