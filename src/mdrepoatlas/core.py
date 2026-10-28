@@ -793,8 +793,14 @@ def write_snapshot(
     if max_file_bytes < 0 or max_total_bytes < 0:
         raise ValueError("size limits must be non-negative")
     source_path = Path(source).expanduser()
-    if source_path.is_symlink():
-        raise SnapshotError("source root must not be a symlink")
+    try:
+        source_info = source_path.stat(follow_symlinks=False)
+    except OSError as exc:
+        raise SnapshotError(f"source directory is unavailable: {source}") from exc
+    if _is_link_or_reparse(source_info):
+        raise SnapshotError("source root must not be a symlink or reparse point")
+    if not stat.S_ISDIR(source_info.st_mode):
+        raise SnapshotError(f"source is not a directory: {source}")
     try:
         root = source_path.resolve(strict=True)
     except OSError as exc:
@@ -807,6 +813,8 @@ def write_snapshot(
         raise SnapshotError(f"source directory is unavailable: {source}") from exc
     if _is_link_or_reparse(root_info) or not stat.S_ISDIR(root_info.st_mode):
         raise SnapshotError("source root must be a regular directory")
+    if not _same_identity(_identity(source_info), root_info):
+        raise SnapshotError("unsafe path change detected for source root: identity changed")
     root_identity = _identity(root_info)
     user_patterns = [exclude] if isinstance(exclude, str) else list(exclude)
     reserved_candidates: list[os.PathLike[str] | str] = []

@@ -145,6 +145,32 @@ def test_symlinks_and_outside_targets_are_not_followed(tmp_path: Path) -> None:
     assert result.skipped_symlinks == 2
 
 
+def test_source_root_symlink_is_rejected(tmp_path: Path) -> None:
+    source = tmp_path / "repo"
+    source.mkdir()
+    (source / "inside.txt").write_text("inside", encoding="utf-8")
+    source_link = tmp_path / "repo-link"
+    replace_with_symlink(source_link, source, directory=True)
+
+    with pytest.raises(SnapshotError, match="source root must not be"):
+        render(source_link)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows junction behavior")
+def test_windows_source_root_junction_is_rejected(tmp_path: Path) -> None:
+    source = tmp_path / "repo"
+    source.mkdir()
+    (source / "inside.txt").write_text("inside", encoding="utf-8")
+    source_junction = tmp_path / "repo-junction"
+    create_windows_junction(source_junction, source)
+
+    try:
+        with pytest.raises(SnapshotError, match="source root must not be"):
+            render(source_junction)
+    finally:
+        source_junction.rmdir()
+
+
 def test_file_symlink_substitution_after_discovery_is_rejected(
     tmp_path: Path, monkeypatch
 ) -> None:
