@@ -3,6 +3,9 @@ from __future__ import annotations
 import hashlib
 import io
 import os
+import subprocess
+import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -19,6 +22,26 @@ def render(source: Path, **kwargs) -> tuple[str, SnapshotResult]:
 
 def listed(text: str, path: str) -> bool:
     return f"<code>{path}</code>" in text
+
+
+def replace_with_symlink(path: Path, target: Path, *, directory: bool = False) -> None:
+    try:
+        path.symlink_to(target, target_is_directory=directory)
+    except OSError as exc:
+        pytest.skip(f"symlink creation unavailable: {exc}")
+
+
+def create_windows_junction(path: Path, target: Path) -> None:
+    completed = subprocess.run(
+        ["cmd.exe", "/d", "/c", "mklink", "/J", str(path), str(target)],
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        pytest.skip(f"junction creation unavailable: {completed.stderr or completed.stdout}")
 
 
 def test_normal_traversal_and_api_result(tmp_path: Path) -> None:
@@ -122,6 +145,140 @@ def test_symlinks_and_outside_targets_are_not_followed(tmp_path: Path) -> None:
     assert result.skipped_symlinks == 2
 
 
+def test_file_symlink_substitution_after_discovery_is_rejected(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = tmp_path / "repo"
+    source.mkdir()
+    victim = source / "victim.txt"
+    victim.write_text("inside", encoding="utf-8")
+    sentinel = "OUTSIDE_FILE_SENTINEL"
+    outside = tmp_path / "outside.txt"
+    outside.write_text(sentinel, encoding="utf-8")
+    original_discover = core._discover
+
+    def discover_then_swap(*args, **kwargs):
+        discovery = original_discover(*args, **kwargs)
+        victim.unlink()
+        replace_with_symlink(victim, outside)
+        return discovery
+
+    monkeypatch.setattr(core, "_discover", discover_then_swap)
+    output = io.StringIO()
+
+    with pytest.raises(SnapshotError, match="unsafe path change"):
+        write_snapshot(source, output, use_default_excludes=False)
+    assert sentinel not in output.getvalue()
+    assert output.getvalue() == ""
+
+
+def test_directory_symlink_substitution_after_discovery_is_rejected(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = tmp_path / "repo"
+    nested = source / "nested"
+    nested.mkdir(parents=True)
+    victim = nested / "victim.txt"
+    victim.write_text("inside", encoding="utf-8")
+    outside = tmp_path / "outside"
+    sentinel = "OUTSIDE_DIRECTORY_SENTINEL"
+    original_discover = core._discover
+
+    def discover_then_swap(*args, **kwargs):
+        discovery = original_discover(*args, **kwargs)
+        nested.rename(outside)
+        (outside / "victim.txt").write_text(sentinel, encoding="utf-8")
+        replace_with_symlink(nested, outside, directory=True)
+        return discovery
+
+    monkeypatch.setattr(core, "_discover", discover_then_swap)
+    output = io.StringIO()
+
+    with pytest.raises(SnapshotError, match="unsafe path change"):
+        write_snapshot(source, output, use_default_excludes=False)
+    assert sentinel not in output.getvalue()
+    assert output.getvalue() == ""
+
+
+def test_symlink_substitution_before_render_reread_is_rejected(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = tmp_path / "repo"
+    source.mkdir()
+    victim = source / "victim.txt"
+    victim.write_text("inside", encoding="utf-8")
+    sentinel = "OUTSIDE_REREAD_SENTINEL"
+    outside = tmp_path / "outside.txt"
+    outside.write_text(sentinel, encoding="utf-8")
+    original_analyze = core._analyze_files
+
+    def analyze_then_swap(*args, **kwargs):
+        records, total = original_analyze(*args, **kwargs)
+        victim.unlink()
+        replace_with_symlink(victim, outside)
+        return records, total
+
+    monkeypatch.setattr(core, "_analyze_files", analyze_then_swap)
+    output = io.StringIO()
+
+    with pytest.raises(SnapshotError, match="unsafe path change"):
+        write_snapshot(source, output, use_default_excludes=False)
+    assert sentinel not in output.getvalue()
+    assert output.getvalue() == ""
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows junction behavior")
+def test_windows_junction_is_skipped(tmp_path: Path) -> None:
+    source = tmp_path / "repo"
+    source.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = "OUTSIDE_JUNCTION_SENTINEL"
+    (outside / "secret.txt").write_text(sentinel, encoding="utf-8")
+    junction = source / "junction"
+    create_windows_junction(junction, outside)
+
+    try:
+        text, result = render(source, use_default_excludes=False)
+    finally:
+        junction.rmdir()
+
+    assert sentinel not in text
+    assert result.skipped_symlinks == 1
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows junction behavior")
+def test_windows_junction_substitution_after_discovery_is_rejected(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = tmp_path / "repo"
+    nested = source / "nested"
+    nested.mkdir(parents=True)
+    (nested / "victim.txt").write_text("inside", encoding="utf-8")
+    outside = tmp_path / "outside"
+    sentinel = "OUTSIDE_JUNCTION_RACE_SENTINEL"
+    original_discover = core._discover
+
+    def discover_then_swap(*args, **kwargs):
+        discovery = original_discover(*args, **kwargs)
+        nested.rename(outside)
+        (outside / "victim.txt").write_text(sentinel, encoding="utf-8")
+        create_windows_junction(nested, outside)
+        return discovery
+
+    monkeypatch.setattr(core, "_discover", discover_then_swap)
+    output = io.StringIO()
+
+    try:
+        with pytest.raises(SnapshotError, match="unsafe path change"):
+            write_snapshot(source, output, use_default_excludes=False)
+    finally:
+        if nested.exists():
+            nested.rmdir()
+    assert sentinel not in output.getvalue()
+    assert output.getvalue() == ""
+
+
 def test_output_path_inside_source_is_excluded(tmp_path: Path) -> None:
     source = tmp_path / "repo"
     source.mkdir()
@@ -168,14 +325,18 @@ def test_binary_unicode_and_invalid_utf8(tmp_path: Path) -> None:
 def test_unreadable_file_is_an_explicit_omission(tmp_path: Path, monkeypatch) -> None:
     blocked = tmp_path / "blocked.txt"
     blocked.write_text("private", encoding="utf-8")
-    original_open = Path.open
+    original_open = core._open_verified_binary
 
-    def guarded_open(path: Path, *args, **kwargs):
-        if path == blocked:
+    @contextmanager
+    def guarded_open(root, root_identity, relative_path, expected_identity):
+        if relative_path == "blocked.txt":
             raise PermissionError("blocked for test")
-        return original_open(path, *args, **kwargs)
+        with original_open(
+            root, root_identity, relative_path, expected_identity
+        ) as stream:
+            yield stream
 
-    monkeypatch.setattr(Path, "open", guarded_open)
+    monkeypatch.setattr(core, "_open_verified_binary", guarded_open)
     text, result = render(tmp_path)
 
     assert "blocked.txt</code> — lang=text, status=unreadable" in text

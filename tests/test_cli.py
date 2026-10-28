@@ -79,7 +79,10 @@ def test_legacy_sanitize_paths_flag_remains_accepted(tmp_path: Path) -> None:
 
 def test_c2md_module_compatibility() -> None:
     env = os.environ.copy()
-    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+    python_paths = [str(Path(__file__).resolve().parents[1] / "src")]
+    if env.get("PYTHONPATH"):
+        python_paths.append(env["PYTHONPATH"])
+    env["PYTHONPATH"] = os.pathsep.join(python_paths)
     completed = subprocess.run(
         [sys.executable, "-m", "c2md.cli", "--version"],
         env=env,

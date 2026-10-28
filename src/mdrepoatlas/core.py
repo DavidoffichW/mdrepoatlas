@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import html
 import json
@@ -9,9 +10,10 @@ import os
 import re
 import stat
 import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Iterable, Sequence, TextIO
+from typing import BinaryIO, Iterable, Iterator, Sequence, TextIO
 
 from pathspec.gitignore import GitIgnoreSpec
 from pathspec.patterns.gitwildmatch import GitWildMatchPatternError
@@ -60,6 +62,10 @@ class SnapshotError(RuntimeError):
     """Raised when a complete, internally consistent snapshot cannot be made."""
 
 
+class _UnsafePathError(SnapshotError):
+    """Raised when an opened object no longer matches its discovered path."""
+
+
 @dataclass(frozen=True)
 class SnapshotResult:
     """Concise result summary returned by :func:`write_snapshot`."""
@@ -84,12 +90,15 @@ class _IgnoreLayer:
 class _DiscoveredFile:
     path: str
     absolute_path: Path
+    identity: tuple[int, int]
+    size_hint: int
 
 
 @dataclass(frozen=True)
 class _FileRecord:
     path: str
     absolute_path: Path
+    identity: tuple[int, int]
     language: str
     size: int | None
     sha256: str | None
@@ -136,15 +145,154 @@ def _path_for_layer(path: str, base: str) -> str | None:
     return None
 
 
-def _is_link_or_reparse(entry: os.DirEntry[str]) -> bool:
-    if entry.is_symlink():
+def _is_link_or_reparse(info: os.stat_result) -> bool:
+    if stat.S_ISLNK(info.st_mode):
         return True
-    try:
-        attributes = getattr(entry.stat(follow_symlinks=False), "st_file_attributes", 0)
-    except OSError:
-        return False
+    attributes = getattr(info, "st_file_attributes", 0)
     reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
     return bool(reparse_flag and attributes & reparse_flag)
+
+
+def _identity(info: os.stat_result) -> tuple[int, int]:
+    return info.st_dev, info.st_ino
+
+
+def _same_identity(expected: tuple[int, int], actual: os.stat_result) -> bool:
+    observed = _identity(actual)
+    if expected[1] == 0 or observed[1] == 0:
+        return True
+    if expected[0] == 0 or observed[0] == 0:
+        return observed[1] == expected[1]
+    return observed == expected
+
+
+def _unsafe_path(path: str, detail: str) -> _UnsafePathError:
+    return _UnsafePathError(f"unsafe path change detected for {path}: {detail}")
+
+
+def _windows_final_path(file_descriptor: int) -> Path:
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    get_final_path = ctypes.WinDLL("kernel32", use_last_error=True).GetFinalPathNameByHandleW
+    get_final_path.argtypes = [
+        wintypes.HANDLE,
+        wintypes.LPWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+    ]
+    get_final_path.restype = wintypes.DWORD
+    handle = msvcrt.get_osfhandle(file_descriptor)
+    size = 1024
+    while True:
+        buffer = ctypes.create_unicode_buffer(size)
+        length = get_final_path(handle, buffer, size, 0)
+        if length == 0:
+            error = ctypes.get_last_error()
+            raise OSError(error, "GetFinalPathNameByHandleW failed")
+        if length < size:
+            value = buffer.value
+            break
+        size = length + 1
+    if value.startswith("\\\\?\\UNC\\"):
+        value = "\\\\" + value[8:]
+    elif value.startswith("\\\\?\\"):
+        value = value[4:]
+    return Path(value)
+
+
+def _verify_opened_file(
+    stream: BinaryIO,
+    *,
+    root: Path,
+    relative_path: str,
+    expected_identity: tuple[int, int],
+) -> os.stat_result:
+    opened = os.fstat(stream.fileno())
+    if not stat.S_ISREG(opened.st_mode):
+        raise _unsafe_path(relative_path, "opened object is not a regular file")
+    if not _same_identity(expected_identity, opened):
+        raise _unsafe_path(relative_path, "opened object identity changed")
+    if os.name == "nt":
+        try:
+            final_path = _windows_final_path(stream.fileno())
+            final_path.relative_to(root)
+        except (OSError, ValueError) as exc:
+            raise _unsafe_path(relative_path, "opened object is outside the source root") from exc
+    return opened
+
+
+@contextmanager
+def _open_verified_binary(
+    root: Path,
+    root_identity: tuple[int, int],
+    relative_path: str,
+    expected_identity: tuple[int, int],
+) -> Iterator[BinaryIO]:
+    parts = PurePosixPath(relative_path).parts
+    if not parts or any(part in {"", ".", ".."} for part in parts):
+        raise _unsafe_path(relative_path, "invalid relative path")
+    if os.name == "nt":
+        path = root.joinpath(*parts)
+        with path.open("rb") as stream:
+            _verify_opened_file(
+                stream,
+                root=root,
+                relative_path=relative_path,
+                expected_identity=expected_identity,
+            )
+            yield stream
+        return
+
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    directory_flag = getattr(os, "O_DIRECTORY", 0)
+    close_on_exec = getattr(os, "O_CLOEXEC", 0)
+    non_blocking = getattr(os, "O_NONBLOCK", 0)
+    if not no_follow or not directory_flag:
+        raise SnapshotError("secure no-follow file opening is unavailable on this platform")
+    directory_fds: list[int] = []
+    file_fd: int | None = None
+    stream: BinaryIO | None = None
+    try:
+        root_fd = os.open(root, os.O_RDONLY | directory_flag | no_follow | close_on_exec)
+        directory_fds.append(root_fd)
+        root_info = os.fstat(root_fd)
+        if not _same_identity(root_identity, root_info):
+            raise _unsafe_path(relative_path, "source root identity changed")
+        current_fd = root_fd
+        for component in parts[:-1]:
+            current_fd = os.open(
+                component,
+                os.O_RDONLY | directory_flag | no_follow | close_on_exec,
+                dir_fd=current_fd,
+            )
+            directory_fds.append(current_fd)
+        file_fd = os.open(
+            parts[-1],
+            os.O_RDONLY | no_follow | close_on_exec | non_blocking,
+            dir_fd=current_fd,
+        )
+        stream = os.fdopen(file_fd, "rb", closefd=True)
+        file_fd = None
+        _verify_opened_file(
+            stream,
+            root=root,
+            relative_path=relative_path,
+            expected_identity=expected_identity,
+        )
+        yield stream
+    except OSError as exc:
+        if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+            raise _unsafe_path(relative_path, "symlink or replaced directory component") from exc
+        raise
+    finally:
+        if stream is not None:
+            stream.close()
+        if file_fd is not None:
+            os.close(file_fd)
+        for descriptor in reversed(directory_fds):
+            os.close(descriptor)
 
 
 class _IgnorePolicy:
@@ -248,14 +396,15 @@ def _discover(
         for entry in entries:
             relative = entry.name if not base else f"{base}/{entry.name}"
             relative = PurePosixPath(relative).as_posix()
-            if _is_link_or_reparse(entry):
-                skipped_symlinks += 1
-                continue
             try:
-                is_directory = entry.is_dir(follow_symlinks=False)
-                is_file = entry.is_file(follow_symlinks=False)
+                entry_info = entry.stat(follow_symlinks=False)
             except OSError as exc:
                 raise SnapshotError(f"cannot inspect {relative}: {exc}") from exc
+            if _is_link_or_reparse(entry_info):
+                skipped_symlinks += 1
+                continue
+            is_directory = stat.S_ISDIR(entry_info.st_mode)
+            is_file = stat.S_ISREG(entry_info.st_mode)
             if not (is_directory or is_file):
                 excluded_paths += 1
                 continue
@@ -270,7 +419,11 @@ def _discover(
             if is_directory:
                 walk(absolute, relative, layers)
             else:
-                files.append(_DiscoveredFile(relative, absolute))
+                files.append(
+                    _DiscoveredFile(
+                        relative, absolute, _identity(entry_info), entry_info.st_size
+                    )
+                )
 
     walk(root, "", ())
     files.sort(key=lambda item: (_priority(item.path), item.path))
@@ -315,14 +468,15 @@ def _normalize_text(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
-def _analyze_file(item: _DiscoveredFile, max_file_bytes: int) -> _FileRecord:
+def _analyze_file(
+    root: Path,
+    root_identity: tuple[int, int],
+    item: _DiscoveredFile,
+    max_file_bytes: int,
+) -> _FileRecord:
     path = item.absolute_path
     try:
-        size_hint = path.stat().st_size
-    except OSError:
-        size_hint = None
-    try:
-        with path.open("rb") as stream:
+        with _open_verified_binary(root, root_identity, item.path, item.identity) as stream:
             before = os.fstat(stream.fileno())
             size = before.st_size
             if max_file_bytes > 0 and size > max_file_bytes:
@@ -334,35 +488,57 @@ def _analyze_file(item: _DiscoveredFile, max_file_bytes: int) -> _FileRecord:
                 file_hash = hashlib.sha256(raw).hexdigest()
             after = os.fstat(stream.fileno())
     except OSError:
-        return _FileRecord(item.path, path, _language(item.path), size_hint, None, "unreadable", 0)
+        return _FileRecord(
+            item.path, path, item.identity, _language(item.path), item.size_hint,
+            None, "unreadable", 0,
+        )
     if before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns or bytes_read != size:
         raise SnapshotError(f"input changed while reading: {item.path}")
     if raw is None:
-        return _FileRecord(item.path, path, _language(item.path), size, file_hash, "too_large", 0)
+        return _FileRecord(
+            item.path, path, item.identity, _language(item.path), size,
+            file_hash, "too_large", 0,
+        )
     if _looks_binary(raw):
-        return _FileRecord(item.path, path, _language(item.path), size, file_hash, "binary", 0)
+        return _FileRecord(
+            item.path, path, item.identity, _language(item.path), size,
+            file_hash, "binary", 0,
+        )
     try:
         text = _normalize_text(raw.decode("utf-8-sig"))
     except UnicodeDecodeError:
-        return _FileRecord(item.path, path, _language(item.path), size, file_hash, "decode_error", 0)
+        return _FileRecord(
+            item.path, path, item.identity, _language(item.path), size,
+            file_hash, "decode_error", 0,
+        )
     if _looks_minified(item.path, text):
-        return _FileRecord(item.path, path, _language(item.path), size, file_hash, "minified", 0)
+        return _FileRecord(
+            item.path, path, item.identity, _language(item.path), size,
+            file_hash, "minified", 0,
+        )
     emitted = len(text.encode("utf-8"))
-    return _FileRecord(item.path, path, _language(item.path), size, file_hash, "embedded", emitted)
+    return _FileRecord(
+        item.path, path, item.identity, _language(item.path), size,
+        file_hash, "embedded", emitted,
+    )
 
 
 def _analyze_files(
-    files: Sequence[_DiscoveredFile], max_file_bytes: int, max_total_bytes: int
+    root: Path,
+    root_identity: tuple[int, int],
+    files: Sequence[_DiscoveredFile],
+    max_file_bytes: int,
+    max_total_bytes: int,
 ) -> tuple[list[_FileRecord], int]:
     records: list[_FileRecord] = []
     emitted_total = 0
     for item in files:
-        record = _analyze_file(item, max_file_bytes)
+        record = _analyze_file(root, root_identity, item, max_file_bytes)
         if record.status == "embedded" and max_total_bytes > 0:
             if emitted_total + record.emitted_bytes > max_total_bytes:
                 record = _FileRecord(
-                    record.path, record.absolute_path, record.language, record.size,
-                    record.sha256, "total_limit", 0,
+                    record.path, record.absolute_path, record.identity,
+                    record.language, record.size, record.sha256, "total_limit", 0,
                 )
         if record.status == "embedded":
             emitted_total += record.emitted_bytes
@@ -370,9 +546,16 @@ def _analyze_files(
     return records, emitted_total
 
 
-def _load_verified_text(record: _FileRecord, max_file_bytes: int) -> str:
+def _load_verified_text(
+    root: Path,
+    root_identity: tuple[int, int],
+    record: _FileRecord,
+    max_file_bytes: int,
+) -> str:
     try:
-        with record.absolute_path.open("rb") as stream:
+        with _open_verified_binary(
+            root, root_identity, record.path, record.identity
+        ) as stream:
             raw = stream.read(max_file_bytes + 1 if max_file_bytes > 0 else -1)
     except OSError as exc:
         raise SnapshotError(f"input became unreadable: {record.path}") from exc
@@ -501,6 +684,8 @@ def _record_meta(record: _FileRecord) -> str:
 
 def _render(
     output: TextIO,
+    root: Path,
+    root_identity: tuple[int, int],
     records: Sequence[_FileRecord],
     result: SnapshotResult,
     *,
@@ -573,7 +758,7 @@ def _render(
             }
             output.write(f"> OMITTED: {reasons.get(record.status, record.status)}.\n\n")
             continue
-        text = _load_verified_text(record, max_file_bytes)
+        text = _load_verified_text(root, root_identity, record, max_file_bytes)
         fence = _fence(text)
         output.write(f"{fence}{record.language}\n{text}")
         if text and not text.endswith("\n"):
@@ -616,6 +801,13 @@ def write_snapshot(
         raise SnapshotError(f"source directory is unavailable: {source}") from exc
     if not root.is_dir():
         raise SnapshotError(f"source is not a directory: {source}")
+    try:
+        root_info = root.stat(follow_symlinks=False)
+    except OSError as exc:
+        raise SnapshotError(f"source directory is unavailable: {source}") from exc
+    if _is_link_or_reparse(root_info) or not stat.S_ISDIR(root_info.st_mode):
+        raise SnapshotError("source root must be a regular directory")
+    root_identity = _identity(root_info)
     user_patterns = [exclude] if isinstance(exclude, str) else list(exclude)
     reserved_candidates: list[os.PathLike[str] | str] = []
     if output_path is not None:
@@ -632,7 +824,9 @@ def write_snapshot(
         include_sensitive=include_sensitive,
         reserved_paths=reserved_paths,
     )
-    records, emitted_total = _analyze_files(discovery.files, max_file_bytes, max_total_bytes)
+    records, emitted_total = _analyze_files(
+        root, root_identity, discovery.files, max_file_bytes, max_total_bytes
+    )
     result = SnapshotResult(
         discovered_files=len(records),
         embedded_files=sum(not record.omitted for record in records),
@@ -647,7 +841,7 @@ def write_snapshot(
         mode="w+", max_size=1024 * 1024, encoding="utf-8", newline="\n"
     ) as staged:
         _render(
-            staged, records, result,
+            staged, root, root_identity, records, result,
             max_file_bytes=max_file_bytes,
             max_total_bytes=max_total_bytes,
             use_gitignore=use_gitignore,
