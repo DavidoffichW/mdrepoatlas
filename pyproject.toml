@@ -1,13 +1,13 @@
 [project]
 name = "mdrepoatlas"
-version = "0.1.2"
-description = "LLM-optimized codebase snapshot generator"
+version = "0.2.0"
+description = "Deterministic repository-to-Markdown snapshot utility"
 readme = { file = "README.md", content-type = "text/markdown" }
-requires-python = ">=3.8"
-license = {text = "MIT"}
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Abdulaziz Alhulail" }]
 keywords = [
-  "llm",
   "codebase",
   "repository",
   "markdown",
@@ -16,15 +16,15 @@ keywords = [
   "cli",
   "developer-tools"
 ]
-dynamic = ["dependencies"]
+dependencies = [
+  "pathspec>=0.12.1,<1",
+]
 
 classifiers = [
-  "Development Status :: 3 - Alpha",
+  "Development Status :: 4 - Beta",
 
   "Intended Audience :: Developers",
   "Intended Audience :: Information Technology",
-
-  "License :: OSI Approved :: MIT License",
 
   "Environment :: Console",
 
@@ -32,11 +32,10 @@ classifiers = [
 
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.8",
-  "Programming Language :: Python :: 3.9",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
 
   "Topic :: Software Development",
   "Topic :: Software Development :: Documentation",
@@ -50,10 +49,17 @@ Repository = "https://github.com/DavidoffichW/mdrepoatlas"
 Issues = "https://github.com/DavidoffichW/mdrepoatlas/issues"
 
 [project.scripts]
-mdrepoatlas = "c2md.cli:main"
+mdrepoatlas = "mdrepoatlas.cli:main"
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2,<2",
+  "pytest>=8,<9",
+  "twine>=6,<7",
+]
 
 [build-system]
-requires = ["setuptools>=68", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
@@ -61,4 +67,9 @@ package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["c2md*"]
+include = ["c2md*", "mdrepoatlas*"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+pythonpath = ["src"]
+testpaths = ["tests"]
