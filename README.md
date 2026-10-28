@@ -86,7 +86,7 @@ By default mdrepoatlas:
 - applies ordinary cache, build, VCS, dependency, binary-archive, and media
   exclusions;
 - blocks common credential and sensitive configuration paths such as `.env`,
-  private-key files, `.ssh/`, and `.aws/`;
+  private-key files, `.ssh/`, `.aws/`, and `.kaggle/` credential files;
 - skips file and directory symlinks, including Windows reparse points;
 - validates the actual opened file on every content pass so a path changed to a
   symlink, junction, or outside-root target is rejected before its bytes are
@@ -100,12 +100,25 @@ and prints a warning to stderr. Automatic exclusions are defensive defaults,
 not secrets detection or a confidentiality guarantee. Always review a snapshot
 before sharing it.
 
+Ignore files are configuration input, so they use the same verified, no-follow
+opening boundary as source content. A `.gitignore` that becomes a symlink,
+junction, outside-root target, unreadable file, or non-regular file causes the
+export to fail without copying partial Markdown. `--no-gitignore` explicitly
+disables this configuration processing.
+
 ## Size and reading semantics
 
 Defaults:
 
 - `--max-file-bytes 524288` (512 KiB)
 - `--max-total-bytes 10485760` (10 MiB)
+
+Git ignore parsing has separate fixed safety limits: 262144 raw bytes per
+`.gitignore` and 1048576 raw bytes in total across root and nested ignore files.
+Files are checked and read with a bounded buffer. Exceeding either limit stops
+the export with an actionable error rather than continuing with an incomplete
+ignore policy. These configuration limits are intentionally independent of the
+source-content options above.
 
 The file limit is checked from file metadata before content is loaded. An
 oversized file is streamed only to calculate accurate size and SHA-256

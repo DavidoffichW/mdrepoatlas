@@ -23,6 +23,8 @@ from . import __version__
 
 DEFAULT_MAX_FILE_BYTES = 512 * 1024
 DEFAULT_MAX_TOTAL_BYTES = 10 * 1024 * 1024
+MAX_GITIGNORE_FILE_BYTES = 256 * 1024
+MAX_GITIGNORE_TOTAL_BYTES = 1024 * 1024
 _COPY_CHUNK_CHARS = 64 * 1024
 _HASH_CHUNK_BYTES = 64 * 1024
 
@@ -39,8 +41,9 @@ DEFAULT_EXCLUDES = (
 
 SENSITIVE_EXCLUDES = (
     ".env", ".env.*", "!.env.example", "!.env.sample", "!.env.template",
-    ".aws/", ".ssh/", ".npmrc", ".pypirc", "*.pem", "*.key", "id_rsa",
-    "id_ed25519", "credentials.json", "secrets/", "secrets.*",
+    ".aws/", ".ssh/", ".kaggle/", ".npmrc", ".pypirc", "*.pem", "*.key",
+    "id_rsa", "id_ed25519", "credentials.json", "kaggle.json", "secrets/",
+    "secrets.*",
 )
 
 _LANGUAGES = {
@@ -334,18 +337,68 @@ class _IgnorePolicy:
         return bool(decision)
 
 
-def _read_gitignore(path: Path, base: str) -> _IgnoreLayer:
+def _read_gitignore(
+    root: Path,
+    root_identity: tuple[int, int],
+    relative_path: str,
+    expected_identity: tuple[int, int],
+    base: str,
+    remaining_bytes: int,
+) -> tuple[_IgnoreLayer, int]:
+    display = relative_path
     try:
-        text = path.read_text(encoding="utf-8-sig")
-    except (OSError, UnicodeError) as exc:
-        display = base + "/.gitignore" if base else ".gitignore"
-        raise SnapshotError(f"cannot read {display}: {exc}") from exc
+        with _open_verified_binary(
+            root, root_identity, relative_path, expected_identity
+        ) as stream:
+            before = os.fstat(stream.fileno())
+            if before.st_size > MAX_GITIGNORE_FILE_BYTES:
+                raise SnapshotError(
+                    f"cannot read {display}: .gitignore exceeds the "
+                    f"{MAX_GITIGNORE_FILE_BYTES}-byte per-file parsing limit"
+                )
+            if before.st_size > remaining_bytes:
+                raise SnapshotError(
+                    f"cannot read {display}: cumulative .gitignore data exceeds the "
+                    f"{MAX_GITIGNORE_TOTAL_BYTES}-byte parsing limit"
+                )
+            chunks: list[bytes] = []
+            bytes_read = 0
+            while True:
+                remaining = min(MAX_GITIGNORE_FILE_BYTES, remaining_bytes) - bytes_read
+                chunk = stream.read(min(_HASH_CHUNK_BYTES, remaining + 1))
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                bytes_read += len(chunk)
+                if bytes_read > MAX_GITIGNORE_FILE_BYTES:
+                    raise SnapshotError(
+                        f"cannot read {display}: .gitignore exceeds the "
+                        f"{MAX_GITIGNORE_FILE_BYTES}-byte per-file parsing limit"
+                    )
+                if bytes_read > remaining_bytes:
+                    raise SnapshotError(
+                        f"cannot read {display}: cumulative .gitignore data exceeds the "
+                        f"{MAX_GITIGNORE_TOTAL_BYTES}-byte parsing limit"
+                    )
+            after = os.fstat(stream.fileno())
+    except OSError as exc:
+        raise SnapshotError(f"cannot securely read {display}: {exc}") from exc
+    if (
+        before.st_size != after.st_size
+        or before.st_mtime_ns != after.st_mtime_ns
+        or bytes_read != before.st_size
+    ):
+        raise SnapshotError(f"cannot read {display}: file changed while reading")
+    raw = b"".join(chunks)
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise SnapshotError(f"cannot read {display}: invalid UTF-8") from exc
     try:
         spec = GitIgnoreSpec.from_lines(text.splitlines())
     except (GitWildMatchPatternError, re.error) as exc:
-        display = base + "/.gitignore" if base else ".gitignore"
         raise SnapshotError(f"invalid pattern in {display}: {exc}") from exc
-    return _IgnoreLayer(base=base, spec=spec)
+    return _IgnoreLayer(base=base, spec=spec), bytes_read
 
 
 def _normalize_reserved(root: Path, candidates: Iterable[os.PathLike[str] | str]) -> set[str]:
@@ -362,6 +415,7 @@ def _normalize_reserved(root: Path, candidates: Iterable[os.PathLike[str] | str]
 
 def _discover(
     root: Path,
+    root_identity: tuple[int, int],
     *,
     user_patterns: Sequence[str],
     use_gitignore: bool,
@@ -379,14 +433,40 @@ def _discover(
     excluded_paths = 0
     skipped_symlinks = 0
     gitignore_files = 0
+    gitignore_bytes = 0
 
     def walk(directory: Path, base: str, inherited_layers: tuple[_IgnoreLayer, ...]) -> None:
-        nonlocal excluded_paths, skipped_symlinks, gitignore_files
+        nonlocal excluded_paths, skipped_symlinks, gitignore_files, gitignore_bytes
         layers = inherited_layers
         ignore_file = directory / ".gitignore"
-        if use_gitignore and ignore_file.is_file() and not ignore_file.is_symlink():
-            layers = inherited_layers + (_read_gitignore(ignore_file, base),)
-            gitignore_files += 1
+        if use_gitignore:
+            relative_ignore = f"{base}/.gitignore" if base else ".gitignore"
+            try:
+                ignore_info = ignore_file.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                ignore_info = None
+            except OSError as exc:
+                raise SnapshotError(f"cannot inspect {relative_ignore}: {exc}") from exc
+            if ignore_info is not None:
+                if _is_link_or_reparse(ignore_info):
+                    raise _unsafe_path(
+                        relative_ignore, ".gitignore is a symlink or reparse point"
+                    )
+                if not stat.S_ISREG(ignore_info.st_mode):
+                    raise SnapshotError(
+                        f"cannot read {relative_ignore}: .gitignore is not a regular file"
+                    )
+                layer, bytes_read = _read_gitignore(
+                    root,
+                    root_identity,
+                    relative_ignore,
+                    _identity(ignore_info),
+                    base,
+                    MAX_GITIGNORE_TOTAL_BYTES - gitignore_bytes,
+                )
+                layers = inherited_layers + (layer,)
+                gitignore_bytes += bytes_read
+                gitignore_files += 1
         try:
             with os.scandir(directory) as iterator:
                 entries = sorted(iterator, key=lambda item: item.name)
@@ -826,6 +906,7 @@ def write_snapshot(
     reserved_paths = _normalize_reserved(root, reserved_candidates)
     discovery = _discover(
         root,
+        root_identity,
         user_patterns=user_patterns,
         use_gitignore=use_gitignore,
         use_default_excludes=use_default_excludes,

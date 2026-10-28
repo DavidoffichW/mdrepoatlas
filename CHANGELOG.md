@@ -17,7 +17,8 @@
 ### Security
 - Skip symlinks and Windows reparse points by default
 - Validate opened file handles on every content pass to reject concurrent symlink, junction, and outside-root substitutions
-- Protect common credential and sensitive configuration paths unless explicitly overridden
+- Protect common credential and sensitive configuration paths, including Kaggle credentials, unless explicitly overridden
+- Securely open root and nested `.gitignore` files and bound their per-file and cumulative parsing size
 - Prevent an output file inside the source tree from ingesting itself
 
 ## [0.1.2] - 2025-09-19

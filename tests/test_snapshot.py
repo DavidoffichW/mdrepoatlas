@@ -82,6 +82,32 @@ def test_root_and_nested_gitignore_with_negation(tmp_path: Path) -> None:
     assert result.gitignore_files == 2
 
 
+def test_gitignore_processing_can_be_disabled(tmp_path: Path) -> None:
+    (tmp_path / ".gitignore").write_text("visible.txt\n", encoding="utf-8")
+    (tmp_path / "visible.txt").write_text("visible", encoding="utf-8")
+
+    text, result = render(
+        tmp_path, use_gitignore=False, use_default_excludes=False
+    )
+
+    assert listed(text, ".gitignore")
+    assert listed(text, "visible.txt")
+    assert result.gitignore_files == 0
+
+
+def test_gitignore_parsing_limit_is_separate_from_source_limit(tmp_path: Path) -> None:
+    (tmp_path / ".gitignore").write_text("ignored.txt\n", encoding="utf-8")
+    (tmp_path / "ignored.txt").write_text("ignored", encoding="utf-8")
+
+    text, result = render(
+        tmp_path, max_file_bytes=1, use_default_excludes=False
+    )
+
+    assert not listed(text, "ignored.txt")
+    assert ".gitignore</code> — lang=unknown, status=too_large" in text
+    assert result.gitignore_files == 1
+
+
 def test_user_exclusions_and_negation(tmp_path: Path) -> None:
     (tmp_path / "drop.txt").write_text("drop", encoding="utf-8")
     (tmp_path / "keep.txt").write_text("keep", encoding="utf-8")
@@ -105,6 +131,183 @@ def test_sensitive_defaults_require_explicit_override(tmp_path: Path) -> None:
     assert not listed(protected, "server.pem")
     assert listed(unprotected, ".env")
     assert listed(unprotected, "server.pem")
+
+
+def test_kaggle_credentials_require_explicit_sensitive_override(tmp_path: Path) -> None:
+    root_credential = tmp_path / ".kaggle" / "kaggle.json"
+    nested_credential = tmp_path / "project" / ".kaggle" / "kaggle.json"
+    named_credential = tmp_path / "config" / "kaggle.json"
+    for path, sentinel in (
+        (root_credential, "FABRICATED_ROOT_KAGGLE_TOKEN"),
+        (nested_credential, "FABRICATED_NESTED_KAGGLE_TOKEN"),
+        (named_credential, "FABRICATED_NAMED_KAGGLE_TOKEN"),
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            f'{{"username":"example","key":"{sentinel}"}}', encoding="utf-8"
+        )
+    (tmp_path / "analysis.py").write_text("print('safe')\n", encoding="utf-8")
+    user_negations = ["!.kaggle/", "!**/.kaggle/", "!kaggle.json"]
+
+    protected, _ = render(
+        tmp_path,
+        exclude=user_negations,
+        use_default_excludes=False,
+    )
+    unprotected, _ = render(
+        tmp_path,
+        exclude=user_negations,
+        use_default_excludes=False,
+        include_sensitive=True,
+    )
+
+    assert listed(protected, "analysis.py")
+    for path, sentinel in (
+        (".kaggle/kaggle.json", "FABRICATED_ROOT_KAGGLE_TOKEN"),
+        ("project/.kaggle/kaggle.json", "FABRICATED_NESTED_KAGGLE_TOKEN"),
+        ("config/kaggle.json", "FABRICATED_NAMED_KAGGLE_TOKEN"),
+    ):
+        assert not listed(protected, path)
+        assert sentinel not in protected
+        assert listed(unprotected, path)
+        assert sentinel in unprotected
+
+
+def test_gitignore_symlink_substitution_is_rejected_without_partial_output(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = tmp_path / "repo"
+    source.mkdir()
+    ignore_file = source / ".gitignore"
+    ignore_file.write_text("safe-only.tmp\n", encoding="utf-8")
+    (source / "visible.txt").write_text("visible", encoding="utf-8")
+    outside_ignore = tmp_path / "outside.ignore"
+    outside_ignore.write_text("visible.txt\n", encoding="utf-8")
+    original_open = core._open_verified_binary
+    swapped = False
+
+    @contextmanager
+    def swap_before_open(root, root_identity, relative_path, expected_identity):
+        nonlocal swapped
+        if relative_path == ".gitignore" and not swapped:
+            ignore_file.unlink()
+            replace_with_symlink(ignore_file, outside_ignore)
+            swapped = True
+        with original_open(
+            root, root_identity, relative_path, expected_identity
+        ) as stream:
+            yield stream
+
+    monkeypatch.setattr(core, "_open_verified_binary", swap_before_open)
+    output = io.StringIO()
+
+    with pytest.raises(SnapshotError, match="unsafe path change"):
+        write_snapshot(source, output, use_default_excludes=False)
+    assert swapped
+    assert output.getvalue() == ""
+
+
+def test_gitignore_directory_symlink_substitution_is_rejected(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = tmp_path / "repo"
+    nested = source / "nested"
+    nested.mkdir(parents=True)
+    ignore_file = nested / ".gitignore"
+    ignore_file.write_text("safe-only.tmp\n", encoding="utf-8")
+    (nested / "visible.txt").write_text("visible", encoding="utf-8")
+    outside = tmp_path / "outside"
+    original_open = core._open_verified_binary
+    swapped = False
+
+    @contextmanager
+    def swap_before_open(root, root_identity, relative_path, expected_identity):
+        nonlocal swapped
+        if relative_path == "nested/.gitignore" and not swapped:
+            nested.rename(outside)
+            (outside / ".gitignore").write_text("visible.txt\n", encoding="utf-8")
+            replace_with_symlink(nested, outside, directory=True)
+            swapped = True
+        with original_open(
+            root, root_identity, relative_path, expected_identity
+        ) as stream:
+            yield stream
+
+    monkeypatch.setattr(core, "_open_verified_binary", swap_before_open)
+    output = io.StringIO()
+
+    with pytest.raises(SnapshotError, match="unsafe path change"):
+        write_snapshot(source, output, use_default_excludes=False)
+    assert swapped
+    assert output.getvalue() == ""
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows junction behavior")
+def test_gitignore_directory_junction_substitution_is_rejected(
+    tmp_path: Path, monkeypatch
+) -> None:
+    source = tmp_path / "repo"
+    nested = source / "nested"
+    nested.mkdir(parents=True)
+    ignore_file = nested / ".gitignore"
+    ignore_file.write_text("safe-only.tmp\n", encoding="utf-8")
+    (nested / "visible.txt").write_text("visible", encoding="utf-8")
+    outside = tmp_path / "outside"
+    original_open = core._open_verified_binary
+    swapped = False
+
+    @contextmanager
+    def swap_before_open(root, root_identity, relative_path, expected_identity):
+        nonlocal swapped
+        if relative_path == "nested/.gitignore" and not swapped:
+            nested.rename(outside)
+            (outside / ".gitignore").write_text("visible.txt\n", encoding="utf-8")
+            create_windows_junction(nested, outside)
+            swapped = True
+        with original_open(
+            root, root_identity, relative_path, expected_identity
+        ) as stream:
+            yield stream
+
+    monkeypatch.setattr(core, "_open_verified_binary", swap_before_open)
+    output = io.StringIO()
+
+    try:
+        with pytest.raises(SnapshotError, match="unsafe path change"):
+            write_snapshot(source, output, use_default_excludes=False)
+    finally:
+        if nested.exists():
+            nested.rmdir()
+    assert swapped
+    assert output.getvalue() == ""
+
+
+def test_oversized_gitignore_fails_without_partial_output(tmp_path: Path) -> None:
+    (tmp_path / ".gitignore").write_bytes(
+        b"#" * (core.MAX_GITIGNORE_FILE_BYTES + 1)
+    )
+    (tmp_path / "visible.txt").write_text("visible", encoding="utf-8")
+    output = io.StringIO()
+
+    with pytest.raises(SnapshotError, match="per-file parsing limit"):
+        write_snapshot(tmp_path, output, use_default_excludes=False)
+    assert output.getvalue() == ""
+
+
+def test_cumulative_gitignore_limit_is_enforced(
+    tmp_path: Path, monkeypatch
+) -> None:
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    (tmp_path / ".gitignore").write_text("a\n", encoding="utf-8")
+    (nested / ".gitignore").write_text("b\n", encoding="utf-8")
+    monkeypatch.setattr(core, "MAX_GITIGNORE_FILE_BYTES", 32)
+    monkeypatch.setattr(core, "MAX_GITIGNORE_TOTAL_BYTES", 3)
+    output = io.StringIO()
+
+    with pytest.raises(SnapshotError, match="cumulative .gitignore data"):
+        write_snapshot(tmp_path, output, use_default_excludes=False)
+    assert output.getvalue() == ""
 
 
 def test_linked_worktree_git_file_is_excluded(tmp_path: Path) -> None:
