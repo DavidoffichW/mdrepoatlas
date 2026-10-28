@@ -58,6 +58,9 @@ Running `mdrepoatlas` without a source starts the retained interactive prompt.
 Interactive mode asks for the source, target directory, exclusions, and output
 filename; other options use their safe defaults.
 
+The legacy `--sanitize-paths` flag is still accepted as a no-op. Path
+sanitization is always enabled in v0.2.0 output.
+
 ## Python API
 
 ```python

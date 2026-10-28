@@ -46,6 +46,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="Explicitly allow paths normally blocked as credentials or sensitive configuration.",
     )
     parser.add_argument(
+        "--sanitize-paths", action="store_true", help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
         "--max-file-bytes", type=_non_negative, default=DEFAULT_MAX_FILE_BYTES,
         help=f"Raw bytes allowed per embedded file; 0 disables (default: {DEFAULT_MAX_FILE_BYTES}).",
     )

@@ -67,6 +67,16 @@ def test_sensitive_override_is_explicit_on_stderr(tmp_path: Path) -> None:
     assert "sensitive-path safeguards are disabled" in completed.stderr
 
 
+def test_legacy_sanitize_paths_flag_remains_accepted(tmp_path: Path) -> None:
+    (tmp_path / "hello.py").write_text("print('hello')\n", encoding="utf-8")
+
+    completed = run_cli(str(tmp_path), "-o", "-", "--sanitize-paths")
+
+    assert completed.returncode == 0
+    assert str(tmp_path) not in completed.stdout
+    assert 'source_root: "."' in completed.stdout
+
+
 def test_c2md_module_compatibility() -> None:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
