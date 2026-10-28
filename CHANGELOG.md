@@ -12,9 +12,11 @@
 - Stream hash calculation for oversized files and stage final output before copying
 - Use explicit omission records for binary, invalid UTF-8, unreadable, and limited files
 - Preserve `c2md` imports and module execution as compatibility wrappers
+- Require a manual, identity-validated release workflow before PyPI publication
 
 ### Security
 - Skip symlinks and Windows reparse points by default
+- Validate opened file handles on every content pass to reject concurrent symlink, junction, and outside-root substitutions
 - Protect common credential and sensitive configuration paths unless explicitly overridden
 - Prevent an output file inside the source tree from ingesting itself
 

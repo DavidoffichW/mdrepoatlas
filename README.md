@@ -88,6 +88,9 @@ By default mdrepoatlas:
 - blocks common credential and sensitive configuration paths such as `.env`,
   private-key files, `.ssh/`, and `.aws/`;
 - skips file and directory symlinks, including Windows reparse points;
+- validates the actual opened file on every content pass so a path changed to a
+  symlink, junction, or outside-root target is rejected before its bytes are
+  read;
 - excludes the requested output file when it is inside the source tree; and
 - emits files in a stable generalized-priority, then path, order.
 
@@ -113,8 +116,13 @@ limit.
 
 Text must be valid UTF-8; Unicode is preserved and newlines are normalized to
 LF. Binary or invalid-UTF-8 files are not embedded. The renderer rereads each
-embedded file and verifies its size and hash. If a file changes, the operation
-fails instead of producing internally inconsistent Markdown.
+embedded file and verifies its size and hash. Secure opens are applied during
+both the analysis and rendering passes. On POSIX, each path component is opened
+relative to the source-directory descriptor without following symlinks. On
+Windows, the final path and identity of the actual opened handle are checked
+against the source root. If a path becomes unsafe or a file changes, the
+operation fails instead of producing an unauthorized or internally
+inconsistent snapshot.
 
 Repository contents are processed one file at a time. The final document is
 staged in a spooled temporary stream so failed reads do not copy a partial
@@ -161,7 +169,16 @@ python -m twine check dist/*
 
 CI runs the tests on Python 3.11 through 3.14 on Linux and Windows, then
 builds the wheel and source distribution and smoke-tests an installed wheel.
-Publication remains a separate tag-triggered workflow.
+Publication is a separate, manually dispatched workflow. It requires an
+existing `vX.Y.Z` tag and the full expected commit SHA, verifies that the tag,
+package version, commit, and `main` history agree, builds and checks the
+distributions, and only then reaches the `pypi` GitHub Environment.
+
+The repository must configure that `pypi` Environment with required reviewers
+and an environment-scoped `PYPI_API_TOKEN`; the workflow file cannot enforce
+those repository settings by itself. PyPI Trusted Publishing is preferable to
+a long-lived API token when repository-side OIDC trust is configured, but this
+workflow does not assume that configuration exists.
 
 ## License
 
