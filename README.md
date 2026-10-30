@@ -9,20 +9,32 @@ explicit omission records.
 The tool reads the local filesystem only. It does not access the Git network or
 modify the source repository.
 
-## Requirements and installation
+## Install and run
 
 mdrepoatlas 0.2.0 requires Python 3.11 or newer.
 
+Install and run it in an isolated environment from Windows PowerShell:
+
+```powershell
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install mdrepoatlas
+.\.venv\Scripts\mdrepoatlas.exe --version
+.\.venv\Scripts\mdrepoatlas.exe . -o snapshot.md
+```
+
+On Linux or macOS:
+
 ```bash
+python3 -m venv .venv
+. .venv/bin/activate
 python -m pip install mdrepoatlas
+mdrepoatlas --version
+mdrepoatlas . -o snapshot.md
 ```
 
-For development from a clone:
-
-```bash
-python -m venv .venv
-python -m pip install -e ".[dev]"
-```
+The final command writes `snapshot.md` for the current directory. Replace `.`
+with the repository you want to export and press Ctrl+C to stop interactive
+mode if you started `mdrepoatlas` without a source path.
 
 ## Command line
 
@@ -167,7 +179,15 @@ unchanged inputs and options produce byte-identical output.
 
 ## Development
 
-Run the functional suite:
+From a repository clone, create a virtual environment and install the editable
+package with its development tools:
+
+```bash
+python -m venv .venv
+python -m pip install -e ".[dev]"
+```
+
+Then run the functional suite:
 
 ```bash
 python -m pytest

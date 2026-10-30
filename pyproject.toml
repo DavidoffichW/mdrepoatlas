@@ -17,7 +17,7 @@ keywords = [
   "developer-tools"
 ]
 dependencies = [
-  "pathspec>=0.12.1,<1",
+  "pathspec",
 ]
 
 classifiers = [
@@ -53,9 +53,9 @@ mdrepoatlas = "mdrepoatlas.cli:main"
 
 [project.optional-dependencies]
 dev = [
-  "build>=1.2,<2",
-  "pytest>=8,<9",
-  "twine>=6,<7",
+  "build",
+  "pytest",
+  "twine",
 ]
 
 [build-system]
