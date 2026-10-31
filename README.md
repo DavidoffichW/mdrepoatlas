@@ -1,30 +1,24 @@
 # mdrepoatlas
 
-`mdrepoatlas` exports a local software repository as one deterministic,
-navigable Markdown document. The snapshot contains compact metadata, a
-directory tree, a language-grouped index, and one section for every discovered
-file. Binary, oversized, unreadable, and total-limit files remain visible as
-explicit omission records.
+> Turn a source tree into one readable Markdown file.
 
-The tool reads the local filesystem only. It does not access the Git network or
-modify the source repository.
+mdrepoatlas walks a local repository and writes a snapshot with a directory
+tree, a language-grouped index, and a section for every discovered file. Files
+that cannot be embedded are still listed, along with the reason they were
+skipped.
 
-## Requirements and installation
+It is deterministic by default: the same files and options produce the same
+bytes. It does not contact Git remotes or modify the source repository.
 
-mdrepoatlas 0.2.0 requires Python 3.11 or newer.
+## Install
+
+mdrepoatlas requires Python 3.11 or newer.
 
 ```bash
 python -m pip install mdrepoatlas
 ```
 
-For development from a clone:
-
-```bash
-python -m venv .venv
-python -m pip install -e ".[dev]"
-```
-
-## Command line
+## Usage
 
 Write a snapshot to a file:
 
@@ -32,20 +26,15 @@ Write a snapshot to a file:
 mdrepoatlas ./repository -o snapshot.md
 ```
 
-Write only Markdown to stdout. Status and diagnostics go to stderr:
+Write Markdown to stdout:
 
 ```bash
 mdrepoatlas ./repository -o - > snapshot.md
 ```
 
-The older target-directory form remains supported:
+Diagnostics go to stderr, so redirected stdout contains only the snapshot.
 
-```bash
-mdrepoatlas ./repository -t ./exports -o snapshot.md
-```
-
-Apply Git-style user exclusions. Repeat `--exclude`, use commas, or use `!` to
-negate an earlier ordinary rule:
+Exclude files with Git-style patterns:
 
 ```bash
 mdrepoatlas ./repository \
@@ -54,12 +43,15 @@ mdrepoatlas ./repository \
   -o snapshot.md
 ```
 
-Running `mdrepoatlas` without a source starts the retained interactive prompt.
-Interactive mode asks for the source, target directory, exclusions, and output
-filename; other options use their safe defaults.
+Repeat `--exclude`, separate patterns with commas, or use `!` to negate an
+earlier ordinary exclusion.
 
-The legacy `--sanitize-paths` flag is still accepted as a no-op. Path
-sanitization is always enabled in v0.2.0 output.
+Running `mdrepoatlas` without a source starts an interactive prompt. The older
+target-directory form also remains available:
+
+```bash
+mdrepoatlas ./repository -t ./exports -o snapshot.md
+```
 
 ## Python API
 
@@ -72,76 +64,66 @@ with open("snapshot.md", "w", encoding="utf-8", newline="\n") as output:
 print(result.embedded_files, result.omitted_files)
 ```
 
-`write_snapshot` accepts `exclude`, `max_file_bytes`, `max_total_bytes`,
-`use_gitignore`, `use_default_excludes`, and `include_sensitive`. It returns an
-immutable `SnapshotResult` with discovered, embedded, omitted, byte, exclusion,
-symlink, and `.gitignore` counts. The existing `c2md` import and
-`python -m c2md.cli` entry point remain compatibility wrappers.
+`write_snapshot` accepts custom exclusions, per-file and total size limits,
+Git-ignore handling, default exclusions, and the sensitive-file override. It
+returns an immutable `SnapshotResult` with useful file, byte, exclusion,
+symlink, and `.gitignore` counts.
 
-## Discovery and exclusions
+The previous `c2md` imports and `python -m c2md.cli` command are kept as
+compatibility wrappers.
 
-By default mdrepoatlas:
+## What gets included
 
-- reads root and nested `.gitignore` files using Git wildmatch rules;
-- applies ordinary cache, build, VCS, dependency, binary-archive, and media
-  exclusions;
-- blocks common credential and sensitive configuration paths such as `.env`,
-  private-key files, `.ssh/`, `.aws/`, and `.kaggle/` credential files;
-- skips file and directory symlinks, including Windows reparse points;
-- validates the actual opened file on every content pass so a path changed to a
-  symlink, junction, or outside-root target is rejected before its bytes are
-  read;
-- excludes the requested output file when it is inside the source tree; and
-- emits files in a stable generalized-priority, then path, order.
+By default, mdrepoatlas:
 
-`--no-default-excludes` disables ordinary noise exclusions but not sensitive
-safeguards. `--include-sensitive` is the explicit override for those safeguards
-and prints a warning to stderr. Automatic exclusions are defensive defaults,
-not secrets detection or a confidentiality guarantee. Always review a snapshot
-before sharing it.
+- follows root and nested `.gitignore` rules;
+- leaves out common build output, caches, dependencies, archives, and media;
+- blocks common credential paths such as `.env`, private keys, `.ssh/`,
+  `.aws/`, and Kaggle credentials;
+- skips symlinks and Windows reparse points;
+- prevents an output file inside the source tree from ingesting itself; and
+- emits files in a stable order.
 
-Ignore files are configuration input, so they use the same verified, no-follow
-opening boundary as source content. A `.gitignore` that becomes a symlink,
-junction, outside-root target, unreadable file, or non-regular file causes the
-export to fail without copying partial Markdown. `--no-gitignore` explicitly
-disables this configuration processing.
+Sensitive exclusions are separate from ordinary exclusions. Turning off the
+ordinary defaults does not turn off the credential safeguards. Use
+`--include-sensitive` when you genuinely intend to export those paths; the
+command prints a warning when you do.
 
-## Size and reading semantics
+These checks are guardrails, not secrets detection. Review a snapshot before
+sharing it.
 
-Defaults:
+## Limits
 
-- `--max-file-bytes 524288` (512 KiB)
-- `--max-total-bytes 10485760` (10 MiB)
+The defaults are:
 
-Git ignore parsing has separate fixed safety limits: 262144 raw bytes per
-`.gitignore` and 1048576 raw bytes in total across root and nested ignore files.
-Files are checked and read with a bounded buffer. Exceeding either limit stops
-the export with an actionable error rather than continuing with an incomplete
-ignore policy. These configuration limits are intentionally independent of the
-source-content options above.
+- 512 KiB per source file
+- 10 MiB of embedded source in total
+- 256 KiB per `.gitignore`
+- 1 MiB across all loaded `.gitignore` files
 
-The file limit is checked from file metadata before content is loaded. An
-oversized file is streamed only to calculate accurate size and SHA-256
-metadata, then recorded as omitted. The total limit counts normalized UTF-8
-source bytes in deterministic file order. Files that would cross it are listed
-as `total_limit` omissions. Passing `0` explicitly disables the corresponding
-limit.
+Change the source limits with `--max-file-bytes` and `--max-total-bytes`.
+Passing `0` disables the corresponding source limit.
 
-Text must be valid UTF-8; Unicode is preserved and newlines are normalized to
-LF. Binary or invalid-UTF-8 files are not embedded. The renderer rereads each
-embedded file and verifies its size and hash. Secure opens are applied during
-both the analysis and rendering passes. On POSIX, each path component is opened
-relative to the source-directory descriptor without following symlinks. On
-Windows, the final path and identity of the actual opened handle are checked
-against the source root. If a path becomes unsafe or a file changes, the
-operation fails instead of producing an unauthorized or internally
-inconsistent snapshot.
+Oversized files are streamed for size and SHA-256 metadata, but their content
+is not loaded into the snapshot. Binary data, invalid UTF-8, unreadable files,
+and files beyond the total limit become explicit omission records.
 
-Repository contents are processed one file at a time. The final document is
-staged in a spooled temporary stream so failed reads do not copy a partial
-snapshot to the caller.
+Ignore files are part of the discovery policy, so mdrepoatlas treats them more
+strictly. An unsafe, unreadable, or oversized `.gitignore` stops the export
+instead of silently continuing with fewer exclusions. Use `--no-gitignore`
+when you intentionally do not want ignore processing.
 
-## Output shape
+## Filesystem safety
+
+Every source read validates the file that was actually opened. On POSIX,
+mdrepoatlas uses descriptor-relative no-follow traversal. On Windows, it checks
+the opened handle's identity and final path against the source root.
+
+If a file changes, becomes a link, or moves outside the root during an export,
+the export fails. The finished Markdown is staged before it is copied to the
+destination, so a failed run does not leave a plausible partial snapshot.
+
+## Output
 
 ```text
 ---
@@ -160,38 +142,32 @@ stats:
 ### FILE: <code>src/example.py</code>
 ```
 
-Code fences expand when source contains backticks. Paths are HTML-escaped in
-headings and indexes. Default metadata contains no generation timestamp,
-absolute local path, output path, operating-system name, or host identifier, so
-unchanged inputs and options produce byte-identical output.
+Code fences grow when embedded source contains backticks. Paths are escaped in
+headings and indexes. Default metadata does not include timestamps, absolute
+paths, hostnames, or operating-system details.
 
 ## Development
 
-Run the functional suite:
-
 ```bash
+git clone https://github.com/DavidoffichW/mdrepoatlas.git
+cd mdrepoatlas
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+# macOS/Linux: source .venv/bin/activate
+python -m pip install -e ".[dev]"
 python -m pytest
 ```
 
-Build and check distributions:
+Build and check the distributions:
 
 ```bash
 python -m build
 python -m twine check dist/*
 ```
 
-CI runs the tests on Python 3.11 through 3.14 on Linux and Windows, then
-builds the wheel and source distribution and smoke-tests an installed wheel.
-Publication is a separate, manually dispatched workflow. It requires an
-existing `vX.Y.Z` tag and the full expected commit SHA, verifies that the tag,
-package version, commit, and `main` history agree, builds and checks the
-distributions, and only then reaches the `pypi` GitHub Environment.
-
-The repository must configure that `pypi` Environment with required reviewers
-and an environment-scoped `PYPI_API_TOKEN`; the workflow file cannot enforce
-those repository settings by itself. PyPI Trusted Publishing is preferable to
-a long-lived API token when repository-side OIDC trust is configured, but this
-workflow does not assume that configuration exists.
+CI covers Python 3.11 through 3.14 on Windows and Linux. Publishing is a
+separate manual workflow that checks the requested tag, package version,
+commit, and `main` history before it can reach the protected PyPI environment.
 
 ## License
 
