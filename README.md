@@ -1,14 +1,14 @@
 # mdrepoatlas
 
-> Turn a source tree into one readable Markdown file.
+> Pack a repository into one Markdown map. For when you've had enough tabs.
 
-mdrepoatlas walks a local repository and writes a snapshot with a directory
-tree, a language-grouped index, and a section for every discovered file. Files
-that cannot be embedded are still listed, along with the reason they were
-skipped.
+Point mdrepoatlas at a source tree and it writes one readable snapshot: a
+directory tree, a language-grouped index, and a section for every discovered
+file. If a file can't be embedded, it still gets listed with the reason it was
+skipped. No mystery gaps.
 
-It is deterministic by default: the same files and options produce the same
-bytes. It does not contact Git remotes or modify the source repository.
+The same files and options produce the same bytes. It doesn't contact Git
+remotes, and it doesn't modify the repository it's mapping.
 
 ## Install
 
@@ -18,7 +18,7 @@ mdrepoatlas requires Python 3.11 or newer.
 python -m pip install mdrepoatlas
 ```
 
-## Usage
+## Take a snapshot
 
 Write a snapshot to a file:
 
@@ -72,7 +72,7 @@ symlink, and `.gitignore` counts.
 The previous `c2md` imports and `python -m c2md.cli` command are kept as
 compatibility wrappers.
 
-## What gets included
+## What makes the cut
 
 By default, mdrepoatlas:
 
@@ -89,8 +89,8 @@ ordinary defaults does not turn off the credential safeguards. Use
 `--include-sensitive` when you genuinely intend to export those paths; the
 command prints a warning when you do.
 
-These checks are guardrails, not secrets detection. Review a snapshot before
-sharing it.
+These are guardrails, not a magical secrets detector. Read the snapshot before
+you share it.
 
 ## Limits
 
@@ -113,7 +113,7 @@ strictly. An unsafe, unreadable, or oversized `.gitignore` stops the export
 instead of silently continuing with fewer exclusions. Use `--no-gitignore`
 when you intentionally do not want ignore processing.
 
-## Filesystem safety
+## Filesystem safety (the unexciting, important part)
 
 Every source read validates the file that was actually opened. On POSIX,
 mdrepoatlas uses descriptor-relative no-follow traversal. On Windows, it checks
