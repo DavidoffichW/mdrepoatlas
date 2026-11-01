@@ -10,11 +10,11 @@ skipped. No mystery gaps.
 The same files and options produce the same bytes. It doesn't contact Git
 remotes, and it doesn't modify the repository it's mapping.
 
-For LLM workflows, the map makes a large codebase easier to load selectively:
-paths, language groups, and explicit omissions help identify which source
-belongs in a prompt instead of copying files blindly. It does not enlarge a
-model's token window or compress source into fewer tokens; exclusions and size
-limits help keep the context focused.
+If you're choosing repository context for an LLM, the paths, language groups,
+and explicit omissions make it easier to select the relevant source instead of
+copying files blindly. The map does not enlarge a model's context window or
+compress source into fewer tokens; exclusions and size limits simply help you
+control what goes in.
 
 ## Install
 

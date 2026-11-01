@@ -1,4 +1,4 @@
-## [0.2.0] - Unreleased
+## [0.2.0] - 2026-10-28
 
 ### Added
 - Public `mdrepoatlas.write_snapshot` API with a concise result summary
